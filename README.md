@@ -1,4 +1,4 @@
-# TranslatorMod
+# MindTranslator
 
 A chat translation mod for Mindustry that translates every chat message in place, showing the
 **original text followed by the translation in parentheses**:
@@ -33,11 +33,11 @@ no file editing required.
 
 ## Installation
 
-1. Drop `TranslatorMod.jar` into Mindustry's **mods** folder:
+1. Drop `MindTranslator.jar` into Mindustry's **mods** folder:
    - Windows: `%USERPROFILE%\AppData\Roaming\Mindustry\mods`
    - Linux: `~/.local/share/mindustry/mods`
    - macOS: `~/Library/Application Support/Mindustry/mods`
-2. Open the main menu → **Mods → TranslatorMod → Enable**.
+2. Open the main menu → **Mods → MindTranslator → Enable**.
 3. To translate chat for everyone on your server, also place the jar into the server's `config/mods`
    folder. Clients with the mod keep working on any server — even ones without it.
 
@@ -108,10 +108,30 @@ sv, cs, fi, no, id, th, ro, bg`.
 Requirements: **Java 17**.
 
 ```bash
-./gradlew build
+./gradlew jar
 ```
 
-Output: `build/libs/TranslatorMod.jar`
+Output: `build/libs/MindTranslatorDesktop.jar` — desktop/PC testing only, it will **not** work on Android
+(mobile needs the dexed version, see below).
+
+## Building with GitHub Actions
+
+This repository is set up with GitHub Actions CI to automatically build the mod on every commit.
+To get a jar that works on **every platform** (PC + Android):
+
+1. Push to the repository — the "Build Mod" workflow runs automatically.
+2. Open the **Actions** tab on your repository page and select the most recent run in the list.
+   If it completed successfully, there is a download link under the **Artifacts** section.
+3. Download the artifact (named after the repository) and import the `MindTranslator.jar`
+   contained within into Mindustry — this version works both on Android and Desktop.
+
+### Building locally with Android support
+
+1. Download the Android SDK, unzip it and set the `ANDROID_HOME` environment variable to its location.
+2. Install a recent platform (e.g. API level 30+) — the build picks the newest `android.jar` available.
+3. Add a `build-tools` folder to your PATH (e.g. `$ANDROID_HOME/build-tools/34.0.0`) so `d8` is available.
+4. Run `./gradlew deploy`. If everything is set up correctly, this creates `MindTranslator.jar`
+   in the `build/libs` directory that runs on both Android and desktop.
 
 ## Dependencies
 
