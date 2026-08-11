@@ -1,22 +1,13 @@
 package translator;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-
+/** Single local player profile; the mod is entirely client-side. */
 public class TranslatorConfig{
-    public boolean enabled = true;
-    public String targetLang = "en";
-    public String othersTargetLang = "off";
-    public String writeLang = "auto";
-    public int minMessageLength = 3;
-    public boolean showDetectedLang = true;
-    public final Map<String, PlayerSetting> players = new LinkedHashMap<>();
 
-    public static class PlayerSetting{
-        public boolean disabled;
-        public String target = "";
-        public String othersTarget = "";
-        public String source = "";
-        public int minLength;
-    }
+    public boolean enabled = true;
+    public String target = "off";
+    public String source = "auto";
+    public String othersTarget = "off";
+    public int minLength = 3;
+    public boolean showDetectedLang = true;
+    public boolean serverTranslates = false;
 }

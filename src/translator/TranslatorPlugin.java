@@ -14,33 +14,20 @@ import arc.scene.ui.layout.Table;
 import arc.struct.Seq;
 import arc.util.Log;
 import arc.util.Strings;
-import arc.util.io.ByteBufferInput;
-import arc.util.io.ByteBufferOutput;
-import arc.util.io.Reads;
-import arc.util.io.Writes;
 import arc.util.serialization.JsonReader;
 import arc.util.serialization.JsonValue;
 import mindustry.Vars;
-import mindustry.core.NetServer;
 import mindustry.game.EventType.ClientLoadEvent;
-import mindustry.gen.Call;
 import mindustry.gen.Icon;
-import mindustry.gen.Player;
-import mindustry.graphics.Pal;
 import mindustry.mod.Mod;
 import mindustry.ui.Styles;
 
-import java.nio.ByteBuffer;
-import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
+/**
+ * Fully client-side chat translator. Outgoing chat is translated before it is
+ * sent, incoming chat is translated before it is displayed; nothing runs on
+ * servers.
+ */
 public class TranslatorPlugin extends Mod{
-
-    /** "[XX[]\u2192[YY[] original (translation)" as broadcast by modded clients. */
-    private static final Pattern SERVER_TAGGED = Pattern.compile("^(\\[[^\\]]*\\])?([A-Za-z]{2,4})\\[\\]\u2192\\[([A-Za-z]{2,4})\\[\\] (.*)$");
-    /** "original[gray] (translation)[]" suffix added by translated broadcasts. */
-    private static final Pattern TRANSLATED_SUFFIX = Pattern.compile("^(.*)(\\[gray\\] \\(.*?\\)\\[\\])$");
 
     private static final String[][] LANGS = {
         {"tr", "Turkish"},
@@ -74,9 +61,8 @@ public class TranslatorPlugin extends Mod{
         "tr", "en", "ru", "de", "fr", "es", "it", "pt", "nl", "pl", "uk", "el", "ar",
         "zh", "ja", "ko", "hi", "sv", "cs", "fi", "no", "id", "th", "ro", "bg");
 
-    private static final Seq<String> GLOBAL_SOURCE_CODES = Seq.with("auto").addAll(LANG_CODES);
-    private static final Seq<String> PERSONAL_TARGET_CODES = Seq.with("off").addAll(LANG_CODES);
-    private static final Seq<String> PERSONAL_SOURCE_CODES = Seq.with("auto").addAll(LANG_CODES);
+    private static final Seq<String> TARGET_CODES = Seq.with("off").addAll(LANG_CODES);
+    private static final Seq<String> SOURCE_CODES = Seq.with("auto").addAll(LANG_CODES);
 
     private static TranslatorPlugin instance;
 
@@ -87,84 +73,20 @@ public class TranslatorPlugin extends Mod{
         return instance;
     }
 
+    /** Language index in the frozen protocol table (see TranslationMarker and README). */
+    public static int langIndex(String code){
+        return LANG_CODES.indexOf(code);
+    }
+
+    public static int langCount(){
+        return LANG_CODES.size;
+    }
+
     @Override
     public void init(){
         instance = this;
         config = loadConfig(getConfigFolder());
         Log.info("[Translator] Chat translation is " + (config.enabled ? "enabled" : "disabled") + ".");
-
-        Vars.netServer.admins.addChatFilter((player, message) -> {
-            if(player == null || message == null || !config.enabled){
-                return message;
-            }
-            TranslatorConfig.PlayerSetting ps = config.players.get(player.uuid());
-            if(ps != null && ps.disabled){
-                return message;
-            }
-            String text = clean(message);
-            int min = config.minMessageLength;
-            if(ps != null && ps.minLength > 0){
-                min = ps.minLength;
-            }
-            if(text.length() < min){
-                return message;
-            }
-            //keep the message as sent: client translation tags are preserved so vanilla clients see the translated version
-            return message;
-        });
-
-        //translates the broadcast/displayed chat into the local player's "incoming" language
-        NetServer.ChatFormatter previousFormatter = Vars.netServer.chatFormatter;
-        Vars.netServer.chatFormatter = (player, message) -> {
-            String formatted = previousFormatter.format(player, message);
-            if(message == null || !config.enabled){
-                return formatted;
-            }
-            //the local player's own messages are already translated by their client's outgoing pipeline
-            if(Vars.player != null && player == Vars.player){
-                return formatted;
-            }
-            String target = incomingTargetForLocal();
-            if(target == null || target.equalsIgnoreCase("off")){
-                return formatted;
-            }
-            String text = clean(message);
-            Matcher tagged = SERVER_TAGGED.matcher(message);
-            if(tagged.matches()){
-                if(tagged.group(3).equalsIgnoreCase(target)){
-                    return formatted;
-                }
-                text = tagged.group(4);
-            }
-            Matcher suffixed = TRANSLATED_SUFFIX.matcher(text);
-            if(suffixed.matches()){
-                text = suffixed.group(1);
-            }
-            text = clean(text);
-            if(text.isEmpty() || text.startsWith("/") || text.length() < incomingMinForLocal()){
-                return formatted;
-            }
-            GoogleTranslator.TranslateResult result = translator.translate(text, target, "auto");
-            if(result == null || result.translation.isEmpty() || result.detectedLang.equalsIgnoreCase(target)){
-                return formatted;
-            }
-            String tag = config.showDetectedLang
-                ? "[cyan]" + result.detectedLang.toUpperCase() + "[]\u2192[" + target.toUpperCase() + "[] "
-                : "";
-            String replacement = tag + text + "[gray] (" + result.translation + ")[]";
-            int idx = formatted.indexOf(message);
-            if(idx < 0){
-                return formatted;
-            }
-            return formatted.substring(0, idx) + replacement + formatted.substring(idx + message.length());
-        };
-
-        Vars.netServer.addBinaryPacketHandler("translator", (player, data) -> {
-            if(player == null){
-                return;
-            }
-            applyBinarySetting(player.uuid(), data);
-        });
 
         if(!Vars.headless){
             Events.on(ClientLoadEvent.class, event -> {
@@ -187,114 +109,40 @@ public class TranslatorPlugin extends Mod{
         Dialog dialog = new Dialog("[gold]Translation Settings[]");
         Table content = new Table();
 
-        if(isGlobalEditor()){
-            content.add("[orange]Server Settings[]").colspan(2).left().pad(8);
-            content.row();
-
-            CheckBox enable = new CheckBox("Translation enabled");
-            enable.setChecked(config.enabled);
-            enable.changed(() -> {
-                config.enabled = enable.isChecked();
-                saveConfig();
-                showInfoToast("[green]Chat translation is now " + (config.enabled ? "enabled" : "disabled") + ".");
-            });
-            content.add(enable).colspan(2).left().padBottom(10);
-            content.row();
-
-            langPicker(content, "Default language players' messages are translated to:", LANG_CODES, false, config.targetLang, code -> {
-                config.targetLang = code;
-                saveConfig();
-                showInfoToast("[green]Default language for players' messages: " + langName(code) + ".");
-            });
-
-            langPicker(content, "Default language players write in:", GLOBAL_SOURCE_CODES, false, config.writeLang, code -> {
-                config.writeLang = code;
-                saveConfig();
-                showInfoToast("[green]Default writing language: " + langName(code) + ".");
-            });
-
-            langPicker(content, "Default language incoming messages are translated to:", PERSONAL_TARGET_CODES, false, config.othersTargetLang, code -> {
-                config.othersTargetLang = code;
-                saveConfig();
-                showInfoToast("[green]Default language for incoming messages: " + labelFor(code) + ".");
-            });
-
-            CheckBox labels = new CheckBox("Show language tags (TR\u2192EN)");
-            labels.setChecked(config.showDetectedLang);
-            labels.changed(() -> {
-                config.showDetectedLang = labels.isChecked();
-                saveConfig();
-            });
-            content.add(labels).colspan(2).left().padTop(12);
-            content.row();
-
-            content.add("Min. message length:").left().padTop(12);
-            TextField minField = new TextField(String.valueOf(config.minMessageLength));
-            minField.setFilter(TextField.TextFieldFilter.digitsOnly);
-            minField.changed(() -> {
-                if(minField.getText().isEmpty()){
-                    return;
-                }
-                int value;
-                try{
-                    value = Integer.parseInt(minField.getText());
-                }catch(Exception e){
-                    return;
-                }
-                if(value < 1){
-                    value = 1;
-                }
-                config.minMessageLength = value;
-                saveConfig();
-            });
-            content.add(minField).width(100).left().padTop(12);
-            content.row();
-            content.image().color(Pal.gray).growX().pad(12);
-            content.row();
-        }
-
-        content.add("[sky]Personal Settings[]").colspan(2).left().pad(8);
+        CheckBox enable = new CheckBox("Translation enabled");
+        enable.setChecked(config.enabled);
+        enable.changed(() -> {
+            config.enabled = enable.isChecked();
+            saveConfig();
+            showInfoToast("[green]Chat translation is now " + (config.enabled ? "enabled" : "disabled") + ".");
+        });
+        content.add(enable).colspan(2).left().padBottom(10);
         content.row();
 
-        TranslatorConfig.PlayerSetting ps = config.players.get(localUuid());
-        String currentTarget = (ps == null || ps.disabled || ps.target.isEmpty()) ? "off" : ps.target;
-        langPicker(content, "Language my messages are translated to:", PERSONAL_TARGET_CODES, false, currentTarget, code -> {
-            TranslatorConfig.PlayerSetting s = settingOf(localUuid());
-            if(code.equals("off")){
-                s.disabled = true;
-                s.target = "";
-                showInfoToast("[scarlet]Your messages will not be translated; they will appear as written.");
-            }else{
-                s.disabled = false;
-                s.target = code;
-                showInfoToast("[green]Your messages will be translated to " + langName(code) + ".");
-            }
+        langPicker(content, "Language my messages are translated to:", TARGET_CODES, false, config.target, code -> {
+            config.target = code;
             saveConfig();
-            syncSetting(s);
+            showInfoToast(code.equals("off")
+                ? "[scarlet]Your messages will not be translated; they will appear as written."
+                : "[green]Your messages will be translated to " + langName(code) + ".");
         });
 
-        String currentSource = (ps == null || ps.source.isEmpty()) ? "auto" : ps.source;
-        langPicker(content, "Language I write in:", PERSONAL_SOURCE_CODES, false, currentSource, code -> {
-            TranslatorConfig.PlayerSetting s = settingOf(localUuid());
-            s.source = code.equals("auto") ? "" : code;
+        langPicker(content, "Language I write in:", SOURCE_CODES, false, config.source, code -> {
+            config.source = code;
             showInfoToast("[green]Your writing language is now " + langName(code) + ".");
             saveConfig();
-            syncSetting(s);
         });
 
-        String currentOthers = (ps == null || ps.othersTarget.isEmpty()) ? config.othersTargetLang : ps.othersTarget;
-        langPicker(content, "Language incoming messages are translated to:", PERSONAL_TARGET_CODES, false, currentOthers, code -> {
-            TranslatorConfig.PlayerSetting s = settingOf(localUuid());
-            s.othersTarget = code.equals("off") ? "off" : code;
+        langPicker(content, "Language incoming messages are translated to:", TARGET_CODES, false, config.othersTarget, code -> {
+            config.othersTarget = code;
             showInfoToast(code.equals("off")
                 ? "[scarlet]Incoming messages will not be translated; they will appear in their original language."
                 : "[green]Incoming messages will be translated to " + langName(code) + ".");
             saveConfig();
-            syncSetting(s);
         });
 
         content.add("Min. message length to translate:").left().padTop(12);
-        TextField minField = new TextField(String.valueOf(ps == null ? 0 : ps.minLength));
+        TextField minField = new TextField(String.valueOf(config.minLength));
         minField.setFilter(TextField.TextFieldFilter.digitsOnly);
         minField.changed(() -> {
             if(minField.getText().isEmpty()){
@@ -306,24 +154,41 @@ public class TranslatorPlugin extends Mod{
             }catch(Exception e){
                 return;
             }
-            if(value < 0){
-                value = 0;
+            if(value < 1){
+                value = 1;
             }
-            TranslatorConfig.PlayerSetting s = settingOf(localUuid());
-            s.minLength = value;
+            config.minLength = value;
             saveConfig();
-            syncSetting(s);
         });
         content.add(minField).width(100).left().padTop(12).padLeft(8);
         content.row();
-        content.add("[orange]0 means the server default (set in Server Settings above) is used.")
-            .colspan(2).wrap().width(Scl.scl(400)).left().padTop(4);
+
+        CheckBox labels = new CheckBox("Show language tags (TR\u2192EN)");
+        labels.setChecked(config.showDetectedLang);
+        labels.changed(() -> {
+            config.showDetectedLang = labels.isChecked();
+            saveConfig();
+        });
+        content.add(labels).colspan(2).left().padTop(12);
+        content.row();
+
+        CheckBox serverSide = new CheckBox("Server already translates (mod stays passive)");
+        serverSide.setChecked(config.serverTranslates);
+        serverSide.changed(() -> {
+            config.serverTranslates = serverSide.isChecked();
+            saveConfig();
+            showInfoToast(config.serverTranslates
+                ? "[cyan]Passive mode: the server handles all translation; your messages are sent as written."
+                : "[cyan]Active mode: the mod translates your messages and incoming ones.");
+        });
+        content.add(serverSide).colspan(2).left().padTop(12);
         content.row();
 
         content.add("[orange]Tip: 'Auto' language detection can rarely be wrong; selecting your language manually improves accuracy.")
             .colspan(2).wrap().width(Scl.scl(400)).left().padTop(12);
         content.row();
-ScrollPane outer = new ScrollPane(content, Styles.defaultPane);
+
+        ScrollPane outer = new ScrollPane(content, Styles.defaultPane);
         outer.setScrollingDisabled(false, false);
         dialog.cont.add(outer).width(Scl.scl(800f)).height(Scl.scl(800f)).pad(4);
 
@@ -381,103 +246,22 @@ ScrollPane outer = new ScrollPane(content, Styles.defaultPane);
         return code;
     }
 
-    private boolean isGlobalEditor(){
-        return Vars.player != null && (!Vars.net.active() || Vars.player.admin);
-    }
-
-    private TranslatorConfig.PlayerSetting settingOf(String uuid){
-        return config.players.computeIfAbsent(uuid, u -> new TranslatorConfig.PlayerSetting());
-    }
-
-    private String localUuid(){
-        Player player = Vars.player;
-        return player != null ? player.uuid() : "";
-    }
-
-    private String incomingTargetForLocal(){
-        TranslatorConfig.PlayerSetting ps = config.players.get(localUuid());
-        if(ps != null && !ps.othersTarget.isEmpty()){
-            return ps.othersTarget;
-        }
-        return config.othersTargetLang;
-    }
-
-    private int incomingMinForLocal(){
-        TranslatorConfig.PlayerSetting ps = config.players.get(localUuid());
-        if(ps != null && ps.minLength > 0){
-            return ps.minLength;
-        }
-        return config.minMessageLength;
-    }
-
     private void showInfoToast(String text){
         Vars.ui.showInfoToast(text, 4f);
     }
 
-    private void syncSetting(TranslatorConfig.PlayerSetting ps){
-        if(!Vars.net.client()){
-            return;
-        }
-        ByteBuffer buffer = ByteBuffer.allocate(192);
-        Writes writes = Writes.get(new ByteBufferOutput(buffer));
-        writes.bool(ps.disabled);
-        writes.str(ps.target);
-        writes.str(ps.source);
-        writes.str(ps.othersTarget);
-        writes.i(ps.minLength);
-        byte[] data = new byte[buffer.position()];
-        buffer.flip();
-        buffer.get(data);
-        Call.clientBinaryPacketReliable("translator", data);
-    }
-
-    private void applyBinarySetting(String uuid, byte[] data){
-        try{
-            Reads reads = Reads.get(new ByteBufferInput(ByteBuffer.wrap(data)));
-            boolean disabled = reads.bool();
-            String target = reads.str();
-            String source = reads.str();
-            String othersTarget = reads.str();
-            int minLength = reads.i();
-            TranslatorConfig.PlayerSetting ps = config.players.computeIfAbsent(uuid, u -> new TranslatorConfig.PlayerSetting());
-            ps.disabled = disabled;
-            ps.target = target;
-            ps.source = source;
-            ps.othersTarget = othersTarget;
-            ps.minLength = minLength;
-            saveConfig();
-            Log.info("[Translator] " + uuid + " settings updated (disabled: " + disabled + ", target: " + target
-                + ", source: " + source + ", othersTarget: " + othersTarget + ", minLength: " + minLength + ").");
-        }catch(Exception e){
-            Log.err("[Translator] Invalid settings packet received.", e);
-        }
-    }
-
     private synchronized void saveConfig(){
         Fi file = getConfigFolder().child("config.json");
-        StringBuilder sb = new StringBuilder("{\n");
-        sb.append("  \"enabled\": ").append(config.enabled).append(",\n");
-        sb.append("  \"targetLang\": \"").append(config.targetLang).append("\",\n");
-        sb.append("  \"writeLang\": \"").append(config.writeLang).append("\",\n");
-        sb.append("  \"othersTargetLang\": \"").append(config.othersTargetLang).append("\",\n");
-        sb.append("  \"minMessageLength\": ").append(config.minMessageLength).append(",\n");
-        sb.append("  \"showDetectedLang\": ").append(config.showDetectedLang).append(",\n");
-        sb.append("  \"players\": {\n");
-        boolean first = true;
-        for(Map.Entry<String, TranslatorConfig.PlayerSetting> entry : config.players.entrySet()){
-            if(!first){
-                sb.append(",\n");
-            }
-            TranslatorConfig.PlayerSetting ps = entry.getValue();
-            sb.append("    \"").append(entry.getKey()).append("\": { \"disabled\": ").append(ps.disabled)
-                .append(", \"target\": \"").append(ps.target)
-                .append("\", \"source\": \"").append(ps.source)
-                .append("\", \"othersTarget\": \"").append(ps.othersTarget)
-                .append("\", \"minLength\": ").append(ps.minLength).append(" }");
-            first = false;
-        }
-        sb.append("\n  }\n}");
-        file.writeString(sb.toString(), false);
+        String json = "{\n" +
+            "  \"enabled\": " + config.enabled + ",\n" +
+            "  \"target\": \"" + config.target + "\",\n" +
+            "  \"source\": \"" + config.source + "\",\n" +
+            "  \"othersTarget\": \"" + config.othersTarget + "\",\n" +
+            "  \"minLength\": " + config.minLength + ",\n" +
+            "  \"showDetectedLang\": " + config.showDetectedLang + ",\n" +
+            "  \"serverTranslates\": " + config.serverTranslates + "\n" +
+            "}";
+        file.writeString(json, false);
     }
 
     private TranslatorConfig loadConfig(Fi configFolder){
@@ -487,35 +271,24 @@ ScrollPane outer = new ScrollPane(content, Styles.defaultPane);
             try{
                 JsonValue value = new JsonReader().parse(file.readString());
                 config.enabled = value.getBoolean("enabled", config.enabled);
-                config.targetLang = value.getString("targetLang", config.targetLang);
-                config.writeLang = value.getString("writeLang", config.writeLang);
-                config.othersTargetLang = value.getString("othersTargetLang", config.othersTargetLang);
-                config.minMessageLength = value.getInt("minMessageLength", config.minMessageLength);
+                config.target = value.getString("target", config.target);
+                config.source = value.getString("source", value.getString("writeLang", config.source));
+                config.othersTarget = value.getString("othersTarget", value.getString("othersTargetLang", config.othersTarget));
+                config.minLength = value.getInt("minLength", value.getInt("minMessageLength", config.minLength));
                 config.showDetectedLang = value.getBoolean("showDetectedLang", config.showDetectedLang);
-                JsonValue players = value.get("players");
-                if(players != null){
-                    for(JsonValue p = players.child; p != null; p = p.next){
-                        TranslatorConfig.PlayerSetting ps = new TranslatorConfig.PlayerSetting();
-                        ps.disabled = p.getBoolean("disabled", false);
-                        ps.target = p.getString("target", "");
-                        ps.source = p.getString("source", "");
-                        ps.othersTarget = p.getString("othersTarget", "");
-                        ps.minLength = p.getInt("minLength", 0);
-                        config.players.put(p.name(), ps);
-                    }
-                }
+                config.serverTranslates = value.getBoolean("serverTranslates", config.serverTranslates);
             }catch(Exception e){
                 Log.err("[Translator] Could not read config.json, using default settings.", e);
             }
         }else{
             file.writeString("{\n" +
                 "  \"enabled\": true,\n" +
-                "  \"targetLang\": \"en\",\n" +
-                "  \"writeLang\": \"auto\",\n" +
-                "  \"othersTargetLang\": \"off\",\n" +
-                "  \"minMessageLength\": 3,\n" +
+                "  \"target\": \"off\",\n" +
+                "  \"source\": \"auto\",\n" +
+                "  \"othersTarget\": \"off\",\n" +
+                "  \"minLength\": 3,\n" +
                 "  \"showDetectedLang\": true,\n" +
-                "  \"players\": {}\n" +
+                "  \"serverTranslates\": false\n" +
                 "}", false);
             Log.info("[Translator] config.json created with default settings.");
         }

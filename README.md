@@ -12,24 +12,34 @@ no file editing required.
 
 ## Features
 
-- **Works on any server** — on servers without the mod, your client translates your outgoing chat
-  before sending it and translates incoming messages before showing them. On servers with the mod,
-  the same experience works for every player.
-- **Three personal language settings** (see [Usage](#usage)):
+- **Works on any server** — the mod is fully client-side: your client translates your outgoing
+  chat before sending it and translates incoming messages before showing them. Nothing needs to
+  be installed on servers, and nothing runs on them.
+- **Player-based settings** (see [Usage](#usage)):
   1. **Language my messages are translated to** — the language your outgoing messages are shown in.
   2. **Language I write in** — your source language (used for accurate detection); `Auto` lets
      Google detect it.
   3. **Language incoming messages are translated to** — the language every incoming message from
      other players is translated into; `Off` shows everything as written.
-- **No double translation** — messages that already carry a `TR→EN` style translation tag are
-  never translated a second time.
-- **Per-player settings, synced** — personal settings are sent to the server over the mod's binary
-  channel (when the server runs the mod) and are applied client-side on any other server.
-- **In-game settings panel** — live previews and instant toasts; all settings are written to
+- **No double translation** — messages that already carry a `TR→EN` style
+  translation tag or the mod's invisible translation marker (see
+  [Translation protocol](#translation-protocol)) are never translated a second
+  time. Already-translated-looking text from other tools is left untouched
+  instead of being re-translated (no more doubled `(translation) (translation)`).
+- **Passive mode** — one checkbox tells the mod the *server* already translates
+  (e.g. foo-client servers): your messages are sent as written and incoming
+  messages are shown untouched, so servers and client never translate the same
+  message twice.
+- **Works alongside Mindustry Tool** — packet interception coexists and the
+  installed `Net` proxy mirrors the vanilla `Net` fields, so Tool features that
+  inspect the network by reflection keep working (see
+  [Compatibility with Mindustry Tool](#compatibility-with-mindustry-tool)).
+- **Resilient** — a failed translation never disables the mod permanently;
+  translation pauses for 60 seconds and resumes automatically.
+- **In-game settings panel** — instant toasts; all settings are written to
   `config.json`.
 - **Rate limited** — Google translation requests are throttled (600 ms apart) so chat stays
   responsive.
-- **Admin-only server defaults** — global fallback languages are only editable by the host/admin.
 
 ## Installation
 
@@ -38,70 +48,147 @@ no file editing required.
    - Linux: `~/.local/share/mindustry/mods`
    - macOS: `~/Library/Application Support/Mindustry/mods`
 2. Open the main menu → **Mods → MindTranslator → Enable**.
-3. To translate chat for everyone on your server, also place the jar into the server's `config/mods`
-   folder. Clients with the mod keep working on any server — even ones without it.
+3. Done — nothing is installed on servers; the mod works on any server, even ones without it.
 
 ## Usage
 
 Open the settings panel with the **gear button in the top-left corner** of the screen.
 
-### Personal Settings (every player)
-
-| Setting | What it does | Default |
-|---|---|---|
-| **Language my messages are translated to** | The language your outgoing messages are shown in. `Off` disables translation of your messages. | `Off` |
-| **Language I write in** | Your source language, used when translating your messages. `Auto` lets Google detect it. | `Auto` |
-| **Language incoming messages are translated to** | The language other players' messages are translated into for you. `Off` shows them as written. | `Off` |
-| **Min. message length to translate** | Messages shorter than this are not translated; `0` uses the server default. | `0` |
-
-**Example:** you write in Turkish, want your messages to appear in English and incoming messages
-translated to Russian — set **1. Language my messages are translated to = English**,
-**2. Language I write in = Turkish**, **3. Language incoming messages are translated to = Russian**.
-
-### Server Settings (host / admin only)
+### Settings
 
 | Setting | What it does | Default |
 |---|---|---|
 | **Translation enabled** | Master switch for translation. | `true` |
-| **Default language players' messages are translated to** | Fallback target for players without a personal setting. | `English` |
-| **Default language players write in** | Fallback source language; `Auto` = automatic detection. | `Auto` |
-| **Default language incoming messages are translated to** | Fallback for players without a personal incoming setting. `Off` = no translation. | `Off` |
+| **Language my messages are translated to** | The language your outgoing messages are shown in. `Off` disables translation of your messages. | `Off` |
+| **Language I write in** | Your source language, used when translating your messages. `Auto` lets Google detect it. | `Auto` |
+| **Language incoming messages are translated to** | The language other players' messages are translated into for you. `Off` shows them as written. | `Off` |
+| **Min. message length to translate** | Messages shorter than this are not translated. | `3` |
 | **Show language tags (TR→EN)** | Show a colored language tag in front of translated messages. | `true` |
-| **Min. message length** | Messages shorter than this are not translated. | `3` |
+| **Server already translates (mod stays passive)** | The server handles all translation (e.g. foo-client servers): your messages are sent as written and incoming messages are shown untouched. | `false` |
+
+**Example:** you write in Turkish, want your messages to appear in English and incoming messages
+translated to Russian — set **Language my messages are translated to = English**,
+**Language I write in = Turkish**, **Language incoming messages are translated to = Russian**.
 
 All changes take effect immediately and are saved to `config.json`.
 
 ## Configuration (config.json)
 
 The file is auto-generated in the mod's config folder and written by the in-game panel; manual
-editing is optional.
+editing is optional. It stores a single local profile — there are no server settings.
 
 ```json
 {
   "enabled": true,
-  "targetLang": "en",
-  "othersTargetLang": "off",
-  "writeLang": "auto",
-  "minMessageLength": 3,
+  "target": "off",
+  "source": "auto",
+  "othersTarget": "off",
+  "minLength": 3,
   "showDetectedLang": true,
-  "players": {
-    "player-uuid": { "disabled": false, "target": "tr", "othersTarget": "ru", "source": "tr", "minLength": 0 }
-  }
+  "serverTranslates": false
 }
 ```
 
 | Field | Description | Default |
 |---|---|---|
 | `enabled` | Translation on/off | `true` |
-| `targetLang` | Default language players' messages are translated to | `en` |
-| `othersTargetLang` | Default language incoming messages are translated to (`off` = none) | `off` |
-| `writeLang` | Default source language (`auto` = detect) | `auto` |
-| `minMessageLength` | Minimum message length to translate | `3` |
+| `target` | Language your messages are translated to (`off` = none) | `off` |
+| `source` | Language you write in (`auto` = detect) | `auto` |
+| `othersTarget` | Language incoming messages are translated to (`off` = none) | `off` |
+| `minLength` | Minimum message length to translate | `3` |
 | `showDetectedLang` | Show language tags (`TR→EN`) | `true` |
-| `players` | Per-player settings (uuid → settings) | `{}` |
+| `serverTranslates` | Passive mode — the server handles all translation | `false` |
+
+Old server-style fields (`targetLang`, `writeLang`, `othersTargetLang`, `minMessageLength`)
+are still read for compatibility and mapped onto the new keys.
 
 Supported language codes: `tr, en, ru, de, fr, es, it, pt, nl, pl, uk, el, ar, zh, ja, ko, hi,
 sv, cs, fi, no, id, th, ro, bg`.
+
+## Translation protocol
+
+This mod marks every translation it produces with an invisible marker so other
+translation mods (and future versions of this one) can tell that a message was
+already translated, in which language, and by which mod:
+
+```
+original [#XXYYZZ][gray] (translation)[]
+```
+
+The marker is a Mindustry color code whose 6 hex digits encode three bytes:
+
+| Byte | Meaning |
+|---|---|
+| `XX` | Mod id of the translator (see registry below) |
+| `YY` | Index of the language the text was translated into (table below) |
+| `ZZ` | 8-bit FNV-1a checksum of the cleaned original text, i.e. the
+        `TranslatorPlugin.clean` output of the original encoded as UTF-8 |
+
+The marker byte is applied and immediately overridden by `[gray]`, so it is
+invisible in-game. There is **no space** between the original text and the
+marker, and the checksum covers the original exactly as it appears in the
+message (an optional `TR→EN` style tag prefix in front is ignored). Readers
+verify the checksum and language index before trusting the marker; on failure
+the legacy `[gray] (…)[ ]` handling is used.
+
+**Reader rules:**
+
+- Marker's language equals the reader's desired target → show the message as-is
+  (no re-translation); the marker stays so further hops also skip it.
+- Marker's language differs → the gray translation is discarded and only the
+  original text is re-translated into the reader's language, re-marked.
+- No marker → legacy path (`TR→EN` tags, `[gray] (…)[]` suffix).
+
+The checksum is a sanity check, not security — a knowledgeable attacker can
+forge markers. Mod ids are assigned by coordination between the participating
+mods:
+
+| `XX` | Mod |
+|---|---|
+| `01` | MindTranslator |
+
+Language indices are frozen to the order above (same list, starting at `00` for
+`tr`); reordering them breaks every other protocol participant, so never move
+entries — only append.
+
+## Compatibility with Mindustry Tool
+
+Both mods replace client-side chat packets. MindTranslator's `Net` proxy only
+intercepts the exact vanilla packet classes; packet subclasses created by other
+mods (Mindustry Tool's `SendTranslatedMessageCallPacket2`) are passed through
+untouched, so both mods can run at the same time: Mindustry Tool handles
+incoming chat translation, MindTranslator keeps handling outgoing messages.
+Since MindTranslator is fully client-side, no server-side interaction exists.
+If Mindustry Tool adopts this marker protocol, outgoing messages translated by
+MindTranslator will not be translated a second time by Tool users and vice
+versa.
+
+Additionally, the installed proxy mirrors every field of the vanilla `Net`
+class (`provider`, `packetProvs`, `packetQueue`, `clientListeners`, ...) with
+values copied at install time and kept in sync, so Tool features that inspect
+the network stack by reflection (`Reflect.get(Vars.net, ...)`) keep working
+unchanged. (Fixed in 2.0.)
+
+## Changelog
+
+### 2.0
+- **Passive mode** (`serverTranslates`): one setting makes the mod fully passive
+  on servers that already translate (e.g. foo-client servers) — no double
+  translation, no double chat lines.
+- **Fixed: commands were being translated** — `/commands` are now always sent as
+  written; the outgoing translation eligibility check is actually enforced now.
+- **Fixed: `(translation) (translation)` duplication** — already-translated text
+  that no longer carries the tag/marker (reformatted by servers or produced by
+  other tools) is shown as-is instead of being translated a second time.
+- **Fixed: translation permanently disabled after one error** — a failed Google
+  request now pauses translation for 60 seconds and resumes automatically.
+- **Mindustry Tool compatibility** — the `Net` proxy mirrors the vanilla `Net`
+  fields, ending `NoSuchFieldException` crashes in tools that reflect over
+  `Vars.net`.
+
+### 1.0
+- Initial release: player-based settings (target / source / incoming target),
+  in-game settings panel, invisible translation marker protocol, tag parsing.
 
 ## Building
 
@@ -137,4 +224,4 @@ To get a jar that works on **every platform** (PC + Android):
 
 - [Mindustry v159.7](https://github.com/Anuken/Mindustry/releases) — `compileOnly`
 - Translation is provided by Google Translate's free `translate_a/single` endpoint (no API key
-  needed); the host/server requires an internet connection.
+  needed); your client requires an internet connection.

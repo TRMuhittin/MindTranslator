@@ -4,7 +4,6 @@ import arc.Core;
 import arc.util.Log;
 import mindustry.Vars;
 import mindustry.core.NetClient;
-import mindustry.gen.Player;
 import mindustry.gen.SendChatMessageCallPacket;
 import mindustry.gen.SendMessageCallPacket2;
 import mindustry.net.Net;
@@ -36,7 +35,9 @@ public class ClientTranslateHandler{
     /** "[XX[]\u2192[YY[] original" as broadcast by modded servers and modded clients. */
     private static final Pattern SERVER_TAGGED = Pattern.compile("^(\\[[^\\]]*\\])?([A-Za-z]{2,4})\\[\\]\u2192\\[([A-Za-z]{2,4})\\[\\] (.*)$");
     /** "original[gray] (translation)[]" without a language tag. */
-    private static final Pattern TRANSLATED_SUFFIX = Pattern.compile("^(.*)(\\[gray\\] \\(.*?\\)\\[\\])$");
+    private static final Pattern TRANSLATED_SUFFIX = Pattern.compile("^(.*?)(\\[gray\\]\\s*\\(.*?\\)\\[\\])$");
+    /** "original (translation)" tail without any styling codes. */
+    private static final Pattern PAREN_TAIL = Pattern.compile("^(.*?) \\([^()]*\\)$");
     /** Tag prefix of an already-translated chat message. */
     private static final Pattern TAGGED = Pattern.compile("^(\\[[^\\]]*\\])?[A-Za-z]{2,4}\\[\\]\u2192\\[[A-Za-z]{2,4}\\[\\]");
 
@@ -47,7 +48,8 @@ public class ClientTranslateHandler{
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
     private final java.util.List<Runnable> pending = new java.util.ArrayList<>();
     private final AtomicLong lastStart = new AtomicLong();
-    private volatile boolean translatorDown;
+    private static final long FAILURE_COOLDOWN_MS = 60_000L;
+    private volatile long translatorDownUntil;
     private boolean running;
 
     private ClientTranslateHandler(TranslatorPlugin mod, Net originalNet){
@@ -88,17 +90,23 @@ public class ClientTranslateHandler{
 
         @Override
         public void run(){
+            if(mod.config.serverTranslates){
+                sendRaw(packet, reliable);
+                return;
+            }
             String raw = TranslatorPlugin.clean(packet.message);
-            String target = effectiveTarget();
-            boolean allowed = mod.config.enabled && !raw.isEmpty() && !raw.startsWith("/")
-                && raw.length() >= effectiveMin() && !alreadyTagged(packet.message) && !isLocalDisabled()
-                && !source().equalsIgnoreCase(target) && !translatorDown;
-            GoogleTranslator.TranslateResult r = translate(raw, target, source());
-            if(r == null){
-                translatorDown = true;
-            }else if(!r.translation.isEmpty() && !r.detectedLang.equalsIgnoreCase(target)){
-                translatorDown = false;
-                packet.message = build(raw, r.translation, r.detectedLang, target, mod.config.showDetectedLang);
+            String target = mod.config.target;
+            if(mod.config.enabled && !target.equalsIgnoreCase("off")
+                && !raw.isEmpty() && !raw.startsWith("/") && raw.length() >= mod.config.minLength
+                && !alreadyTagged(packet.message) && !mod.config.source.equalsIgnoreCase(target)
+                && !translatorDown()){
+                GoogleTranslator.TranslateResult r = translate(raw, target, mod.config.source);
+                if(r == null){
+                    translatorDownUntil = System.currentTimeMillis() + FAILURE_COOLDOWN_MS;
+                }else if(!r.translation.isEmpty() && !r.detectedLang.equalsIgnoreCase(target)){
+                    translatorDownUntil = 0;
+                    packet.message = build(raw, r.translation, r.detectedLang, target, mod.config.showDetectedLang);
+                }
             }
             sendRaw(packet, reliable);
         }
@@ -125,7 +133,11 @@ public class ClientTranslateHandler{
             deliver(packet);
             return;
         }
-        String othersTarget = effectiveOthersTarget();
+        if(mod.config.serverTranslates){
+            deliver(packet);
+            return;
+        }
+        String othersTarget = mod.config.othersTarget;
         boolean own = Vars.player != null && packet.playersender == Vars.player;
         String target = own ? displayTarget() : othersTarget;
         if(target == null || target.equalsIgnoreCase("off")){
@@ -133,20 +145,41 @@ public class ClientTranslateHandler{
             return;
         }
         String text = rawText;
-        Matcher tagged = SERVER_TAGGED.matcher(rawText);
-        if(tagged.matches()){
-            if(tagged.group(3).equalsIgnoreCase(target)){
+        TranslationMarker.Parsed marked = TranslationMarker.unwrap(rawText);
+        if(marked != null){
+            if(marked.langIndex == TranslatorPlugin.langIndex(target)){
                 deliver(packet);
                 return;
             }
-            text = tagged.group(4);
-        }
-        Matcher suffixed = TRANSLATED_SUFFIX.matcher(text);
-        if(suffixed.matches()){
-            text = suffixed.group(1);
+            text = marked.original;
+        }else{
+            Matcher tagged = SERVER_TAGGED.matcher(rawText);
+            if(tagged.matches()){
+                if(tagged.group(3).equalsIgnoreCase(target)){
+                    deliver(packet);
+                    return;
+                }
+                text = tagged.group(4);
+                Matcher s = TRANSLATED_SUFFIX.matcher(text);
+                if(s.matches()){
+                    text = s.group(1);
+                }else{
+                    text = stripTrailingParens(text);
+                }
+            }else{
+                Matcher suffixed = TRANSLATED_SUFFIX.matcher(text);
+                if(suffixed.matches()){
+                    text = suffixed.group(1);
+                }
+                if(hasTrailingParens(TranslatorPlugin.clean(text))){
+                    Log.debug("[Translator] Receive keeping untagged translated-looking text as-is: " + text);
+                    deliver(packet);
+                    return;
+                }
+            }
         }
         String raw = TranslatorPlugin.clean(text);
-        int min = effectiveMin();
+        int min = mod.config.minLength;
         String reason = null;
         if(!mod.config.enabled){
             reason = "disabled";
@@ -179,18 +212,18 @@ public class ClientTranslateHandler{
 
         @Override
         public void run(){
-            if(!mod.config.enabled){
+            if(!mod.config.enabled || mod.config.serverTranslates){
                 deliver(packet);
                 return;
             }
-            String target = own ? displayTarget() : effectiveOthersTarget();
-            if(target == null || target.equalsIgnoreCase("off") || translatorDown){
+            String target = own ? displayTarget() : mod.config.othersTarget;
+            if(target == null || target.equalsIgnoreCase("off") || translatorDown()){
                 deliver(packet);
                 return;
             }
-            GoogleTranslator.TranslateResult r = translate(text, target, own ? source() : "auto");
+            GoogleTranslator.TranslateResult r = translate(text, target, own ? mod.config.source : "auto");
             if(r == null){
-                translatorDown = true;
+                translatorDownUntil = System.currentTimeMillis() + FAILURE_COOLDOWN_MS;
                 Log.err("[Translator] Receive-translate failed for: " + text);
                 deliver(packet);
                 return;
@@ -236,7 +269,7 @@ public class ClientTranslateHandler{
     private void enqueue(Runnable task){
         synchronized(pending){
             if(pending.size() >= MAX_PENDING){
-                translatorDown = true;
+                translatorDownUntil = System.currentTimeMillis() + FAILURE_COOLDOWN_MS;
             }
             pending.add(task);
             if(!running){
@@ -287,69 +320,43 @@ public class ClientTranslateHandler{
         }
     }
 
-    private String source(){
-        TranslatorConfig.PlayerSetting ps = mod.config.players.get(localUuid());
-        if(ps != null && !ps.source.isEmpty()){
-            return ps.source;
-        }
-        return mod.config.writeLang;
-    }
-
-    private String effectiveTarget(){
-        TranslatorConfig.PlayerSetting ps = mod.config.players.get(localUuid());
-        if(ps != null && !ps.target.isEmpty()){
-            return ps.target;
-        }
-        return mod.config.targetLang;
+    /** True while translation is temporarily halted after a failure; recovers automatically. */
+    private boolean translatorDown(){
+        return System.currentTimeMillis() < translatorDownUntil;
     }
 
     /** Language the local player's own messages are shown in: their outgoing target, or "off" when translation of their messages is disabled. */
     private String displayTarget(){
-        if(isLocalDisabled()){
-            return "off";
-        }
-        return effectiveTarget();
-    }
-
-    /** Language received messages are translated into: personal setting, otherwise the server-wide default. */
-    private String effectiveOthersTarget(){
-        TranslatorConfig.PlayerSetting ps = mod.config.players.get(localUuid());
-        if(ps != null && !ps.othersTarget.isEmpty()){
-            return ps.othersTarget;
-        }
-        return mod.config.othersTargetLang;
-    }
-
-    private String localUuid(){
-        Player player = Vars.player;
-        return player != null ? player.uuid() : "";
-    }
-
-    private boolean isLocalDisabled(){
-        TranslatorConfig.PlayerSetting ps = mod.config.players.get(localUuid());
-        return ps != null && ps.disabled;
-    }
-
-    /** Personal threshold if set, otherwise the server-wide default. */
-    private int effectiveMin(){
-        TranslatorConfig.PlayerSetting ps = mod.config.players.get(localUuid());
-        if(ps != null && ps.minLength > 0){
-            return ps.minLength;
-        }
-        return mod.config.minMessageLength;
+        return mod.config.target.equalsIgnoreCase("off") ? "off" : mod.config.target;
     }
 
     private static boolean alreadyTagged(String text){
         if(text == null || text.isEmpty()){
             return false;
         }
+        if(TranslationMarker.unwrap(text) != null){
+            return true;
+        }
         Matcher m = TAGGED.matcher(text);
         return m.find();
     }
 
-    /** "[XX[]\u2192[YY[] original (translation)" */
+    /** Removes a parenthesised translation tail ("..." followed by " (translation)") from a formatted message, leaving everything before it. */
+    private static String stripTrailingParens(String text){
+        Matcher m;
+        while((m = PAREN_TAIL.matcher(text)).matches()){
+            text = m.group(1);
+        }
+        return text;
+    }
+
+    private static boolean hasTrailingParens(String cleaned){
+        return PAREN_TAIL.matcher(cleaned).matches();
+    }
+
+    /** "[XX[]\u2192[YY[] original [#XXYYZZ][gray] (translation)[]" */
     private static String build(String original, String translation, String detected, String target, boolean showTag){
-        return tag(detected, target, showTag) + original + "[gray] (" + translation + ")[]";
+        return tag(detected, target, showTag) + original + TranslationMarker.wrap(original, translation, TranslatorPlugin.langIndex(target));
     }
 
     private static String tag(String detected, String target, boolean showTag){

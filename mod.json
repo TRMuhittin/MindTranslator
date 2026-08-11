@@ -2,8 +2,8 @@
   "name": "MindTranslator",
   "author": "LunarNetwork",
   "main": "translator.TranslatorPlugin",
-  "description": "Translates chat messages in place: pick the language your messages are translated to, the language you write in, and the language incoming messages are translated to. Fully configurable in-game via the gear button in the top-left corner.",
-  "version": "1.0",
+  "description": "Translates chat messages in place: pick the language your messages are translated to, the language you write in, and the language incoming messages are translated to. Client-side only; works on any server. Prevents double translation with an invisible marker protocol, includes a passive mode for servers that already translate (e.g. foo-client servers), and runs alongside Mindustry Tool. Fully configurable in-game via the gear button in the top-left corner.",
+  "version": "2.0",
   "minGameVersion": "159.7",
   "java": true,
   "hidden": true
