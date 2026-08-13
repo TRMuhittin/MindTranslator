@@ -276,12 +276,19 @@ public class TranslatingNet extends Net{
 
     @SuppressWarnings("unchecked")
     private static <T> T valueOf(Net net, String name){
-        try{
-            Field f = net.getClass().getDeclaredField(name);
-            f.setAccessible(true);
-            return (T)f.get(net);
-        }catch(Exception e){
-            return null;
+        //walk the class hierarchy: Vars.net may be a subclass (other mods' proxies), so a field
+        //declared on a superclass must still be found
+        for(Class<?> c = net.getClass(); c != null && c != Object.class; c = c.getSuperclass()){
+            try{
+                Field f = c.getDeclaredField(name);
+                f.setAccessible(true);
+                return (T)f.get(net);
+            }catch(NoSuchFieldException e){
+                //not declared here, keep walking up
+            }catch(Exception e){
+                return null;
+            }
         }
+        return null;
     }
 }

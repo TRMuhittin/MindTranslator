@@ -103,7 +103,7 @@ Old server-style fields (`targetLang`, `writeLang`, `othersTargetLang`, `minMess
 are still read for compatibility and mapped onto the new keys.
 
 Supported language codes: `tr, en, ru, de, fr, es, it, pt, nl, pl, uk, el, ar, zh, ja, ko, hi,
-sv, cs, fi, no, id, th, ro, bg`.
+sv, cs, fi, no, id, th, ro, bg, vi`.
 
 ## Translation protocol
 
@@ -170,6 +170,28 @@ the network stack by reflection (`Reflect.get(Vars.net, ...)`) keep working
 unchanged. (Fixed in 2.0.)
 
 ## Changelog
+
+### 2.2
+- **Vietnamese (vi) added** — now one of 27 supported languages, available in all three
+  language pickers.
+- **Settings panel adapts to your screen** — language pickers are now multi-column grids
+  (2–3 columns depending on window width) instead of long single-column lists, so every
+  language fits without endless scrolling; picker heights share the dialog space and the
+  dialog is clamped to the screen with DPI-consistent sizes, working on narrow windows and
+  phones.
+
+### 2.1
+- **Settings dialog no longer closes accidentally on ESC** — it can only be dismissed with the
+  Close button or the Android back key; ESC keeps its in-game meaning while the menu is open.
+- **Fixed: settings dialog size was far too small or huge depending on UI scale** — sizes were
+  being scaled twice (once by the mod, once by the UI system); the dialog now uses single-scaled
+  sizes capped to the screen, so it fits on phones and tablets too.
+- **Fixed: configuration race between the settings UI and the translator thread** — config fields
+  are now volatile, so toggles take effect reliably.
+- **Fixed: chat could stall when the translation queue was full** — overflowing messages are now
+  sent immediately and untranslated instead of piling up.
+- **Fixed: `Net` reflection mirror failed when `Vars.net` was a subclass** — field lookup now
+  walks the whole class hierarchy.
 
 ### 2.0
 - **Passive mode** (`serverTranslates`): one setting makes the mod fully passive

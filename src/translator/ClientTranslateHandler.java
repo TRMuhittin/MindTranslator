@@ -10,7 +10,6 @@ import mindustry.net.Net;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -30,7 +29,6 @@ import java.util.regex.Pattern;
 public class ClientTranslateHandler{
 
     private static final int MAX_PENDING = 16;
-    private static final long MIN_INTERVAL_MS = 0L;
 
     /** "[XX[]\u2192[YY[] original" as broadcast by modded servers and modded clients. */
     private static final Pattern SERVER_TAGGED = Pattern.compile("^(\\[[^\\]]*\\])?([A-Za-z]{2,4})\\[\\]\u2192\\[([A-Za-z]{2,4})\\[\\] (.*)$");
@@ -47,7 +45,6 @@ public class ClientTranslateHandler{
     private final Net originalNet;
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
     private final java.util.List<Runnable> pending = new java.util.ArrayList<>();
-    private final AtomicLong lastStart = new AtomicLong();
     private static final long FAILURE_COOLDOWN_MS = 60_000L;
     private volatile long translatorDownUntil;
     private boolean running;
@@ -257,6 +254,7 @@ public class ClientTranslateHandler{
         }
         int idx = message.indexOf(region);
         if(idx < 0){
+            Log.warn("[Translator] Could not locate message text in the formatted message; showing it as-is (the server may have reformatted it): " + message);
             return message;
         }
         return message.substring(0, idx) + replacement + message.substring(idx + region.length());
@@ -267,14 +265,26 @@ public class ClientTranslateHandler{
     //------------------------------------------------------------------------
 
     private void enqueue(Runnable task){
+        boolean overflow = false;
         synchronized(pending){
             if(pending.size() >= MAX_PENDING){
-                translatorDownUntil = System.currentTimeMillis() + FAILURE_COOLDOWN_MS;
+                overflow = true;
+            }else{
+                pending.add(task);
+                if(!running){
+                    running = true;
+                    exec.execute(this::workLoop);
+                }
             }
-            pending.add(task);
-            if(!running){
-                running = true;
-                exec.execute(this::workLoop);
+        }
+        if(overflow){
+            translatorDownUntil = System.currentTimeMillis() + FAILURE_COOLDOWN_MS;
+            Log.warn("[Translator] Translation queue full; sending message untranslated.");
+            if(task instanceof SendTask){
+                SendTask sendTask = (SendTask)task;
+                sendRaw(sendTask.packet, sendTask.reliable);
+            }else if(task instanceof ReceiveTask){
+                deliver(((ReceiveTask)task).packet);
             }
         }
     }
@@ -289,16 +299,6 @@ public class ClientTranslateHandler{
                 }
                 task = pending.remove(0);
             }
-            long elapsed = System.currentTimeMillis() - lastStart.get();
-            if(elapsed < MIN_INTERVAL_MS){
-                long wait = MIN_INTERVAL_MS - elapsed;
-                try{
-                    Thread.sleep(wait);
-                }catch(InterruptedException e){
-                    Thread.currentThread().interrupt();
-                }
-            }
-            lastStart.set(System.currentTimeMillis());
             try{
                 task.run();
             }catch(Exception e){

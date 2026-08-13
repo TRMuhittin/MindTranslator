@@ -1,8 +1,10 @@
 package translator;
 
+import arc.Core;
 import arc.Events;
 import arc.files.Fi;
 import arc.func.Cons;
+import arc.input.KeyCode;
 import arc.scene.ui.CheckBox;
 import arc.scene.ui.Dialog;
 import arc.scene.ui.ImageButton;
@@ -54,12 +56,11 @@ public class TranslatorPlugin extends Mod{
         {"id", "Indonesian"},
         {"th", "Thai"},
         {"ro", "Romanian"},
-        {"bg", "Bulgarian"}
+        {"bg", "Bulgarian"},
+        {"vi", "Vietnamese"}
     };
 
-    private static final Seq<String> LANG_CODES = Seq.with(
-        "tr", "en", "ru", "de", "fr", "es", "it", "pt", "nl", "pl", "uk", "el", "ar",
-        "zh", "ja", "ko", "hi", "sv", "cs", "fi", "no", "id", "th", "ro", "bg");
+    private static final Seq<String> LANG_CODES = Seq.with(LANGS).map(lang -> lang[0]);
 
     private static final Seq<String> TARGET_CODES = Seq.with("off").addAll(LANG_CODES);
     private static final Seq<String> SOURCE_CODES = Seq.with("auto").addAll(LANG_CODES);
@@ -106,8 +107,17 @@ public class TranslatorPlugin extends Mod{
     }
 
     private void showSettingsDialog(){
-        Dialog dialog = new Dialog("[gold]Translation Settings[]");
+        Dialog menu = new Dialog("[gold]Translation Settings[]");
+        menu.keyDown(key -> {
+            if(key == KeyCode.back){
+                Core.app.post(menu::hide);
+            }
+        });
         Table content = new Table();
+
+        float w = Math.min(800f, Math.max(320f, Core.graphics.getWidth() / Scl.scl() - 48f));
+        float h = Math.min(800f, Math.max(320f, Core.graphics.getHeight() / Scl.scl() - 160f));
+        float pickerH = Math.min(360f, Math.max(120f, (h - 330f) / 3f));
 
         CheckBox enable = new CheckBox("Translation enabled");
         enable.setChecked(config.enabled);
@@ -119,7 +129,7 @@ public class TranslatorPlugin extends Mod{
         content.add(enable).colspan(2).left().padBottom(10);
         content.row();
 
-        langPicker(content, "Language my messages are translated to:", TARGET_CODES, false, config.target, code -> {
+        langPicker(content, "Language my messages are translated to:", TARGET_CODES, config.target, pickerH, code -> {
             config.target = code;
             saveConfig();
             showInfoToast(code.equals("off")
@@ -127,13 +137,13 @@ public class TranslatorPlugin extends Mod{
                 : "[green]Your messages will be translated to " + langName(code) + ".");
         });
 
-        langPicker(content, "Language I write in:", SOURCE_CODES, false, config.source, code -> {
+        langPicker(content, "Language I write in:", SOURCE_CODES, config.source, pickerH, code -> {
             config.source = code;
             showInfoToast("[green]Your writing language is now " + langName(code) + ".");
             saveConfig();
         });
 
-        langPicker(content, "Language incoming messages are translated to:", TARGET_CODES, false, config.othersTarget, code -> {
+        langPicker(content, "Language incoming messages are translated to:", TARGET_CODES, config.othersTarget, pickerH, code -> {
             config.othersTarget = code;
             showInfoToast(code.equals("off")
                 ? "[scarlet]Incoming messages will not be translated; they will appear in their original language."
@@ -160,7 +170,7 @@ public class TranslatorPlugin extends Mod{
             config.minLength = value;
             saveConfig();
         });
-        content.add(minField).width(100).left().padTop(12).padLeft(8);
+        content.add(minField).width(Scl.scl(100f)).left().padTop(12).padLeft(8);
         content.row();
 
         CheckBox labels = new CheckBox("Show language tags (TR\u2192EN)");
@@ -185,25 +195,31 @@ public class TranslatorPlugin extends Mod{
         content.row();
 
         content.add("[orange]Tip: 'Auto' language detection can rarely be wrong; selecting your language manually improves accuracy.")
-            .colspan(2).wrap().width(Scl.scl(400)).left().padTop(12);
+            .colspan(2).wrap().width(Math.min(400f, w - 8f)).left().padTop(12);
         content.row();
 
         ScrollPane outer = new ScrollPane(content, Styles.defaultPane);
         outer.setScrollingDisabled(false, false);
-        dialog.cont.add(outer).width(Scl.scl(800f)).height(Scl.scl(800f)).pad(4);
+        menu.cont.add(outer).width(w).height(h).pad(4);
 
-        dialog.buttons.defaults().size(280, 60).pad(8);
-        dialog.buttons.button("[scarlet]Close[]", Icon.cancel, dialog::hide);
-        dialog.show();
+        menu.buttons.defaults().size(Scl.scl(280f), Scl.scl(60f)).pad(8);
+        menu.buttons.button("[scarlet]Close[]", Icon.cancel, menu::hide);
+        menu.show();
     }
 
-    private void langPicker(Table parent, String title, Seq<String> codes, boolean twoCols, String current, Cons<String> onSelect){
+    private void langPicker(Table parent, String title, Seq<String> codes, String current, float pickerH, Cons<String> onSelect){
         parent.add(title).colspan(2).left().padTop(12);
         parent.row();
 
+        float pw = Math.min(420f, Math.max(260f, Core.graphics.getWidth() / Scl.scl() - 96f));
+        int cols = pw >= 400f ? 3 : 2;
+        float btnW = (pw - 4f * cols - 4f) / cols;
+        float btnH = Scl.scl(46f);
+
         Table grid = new Table();
         Seq<TextButton> all = new Seq<>();
-        for(String code : codes){
+        for(int i = 0; i < codes.size; i++){
+            String code = codes.get(i);
             TextButton btn = new TextButton(labelFor(code), Styles.flatTogglet);
             btn.setChecked(code.equals(current));
             btn.clicked(() -> {
@@ -214,13 +230,15 @@ public class TranslatorPlugin extends Mod{
                 onSelect.get(code);
             });
             all.add(btn);
-            grid.add(btn).size(380, 52).pad(4);
-            grid.row();
+            grid.add(btn).size(btnW, btnH).pad(4);
+            if((i + 1) % cols == 0){
+                grid.row();
+            }
         }
 
         ScrollPane pane = new ScrollPane(grid, Styles.defaultPane);
         pane.setScrollingDisabled(true, false);
-        parent.add(pane).colspan(2).width(Scl.scl(400)).height(Scl.scl(320)).padTop(4);
+        parent.add(pane).colspan(2).width(pw).height(pickerH).padTop(4);
         parent.row();
     }
 

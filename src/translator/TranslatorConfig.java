@@ -1,13 +1,14 @@
 package translator;
 
-/** Single local player profile; the mod is entirely client-side. */
+/** Single local player profile; the mod is entirely client-side. Fields are volatile: they are
+ * written by the UI thread and read by the translation executor thread. */
 public class TranslatorConfig{
 
-    public boolean enabled = true;
-    public String target = "off";
-    public String source = "auto";
-    public String othersTarget = "off";
-    public int minLength = 3;
-    public boolean showDetectedLang = true;
-    public boolean serverTranslates = false;
+    public volatile boolean enabled = true;
+    public volatile String target = "off";
+    public volatile String source = "auto";
+    public volatile String othersTarget = "off";
+    public volatile int minLength = 3;
+    public volatile boolean showDetectedLang = true;
+    public volatile boolean serverTranslates = false;
 }
